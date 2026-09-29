@@ -1,0 +1,16 @@
+{
+  "baseUrl": null,
+  "threshold": 0.6,
+  "routes": {
+    "appDir": "src/app"
+  },
+  "media": {
+    "roots": ["public"],
+    "remoteOrigin": null,
+    "remoteUploadPrefixes": []
+  },
+  "focusRegistry": {
+    "handPath": null,
+    "autoPath": "image-focus.auto.generated-by-smoke-test.ts"
+  }
+}

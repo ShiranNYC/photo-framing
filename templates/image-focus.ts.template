@@ -1,0 +1,46 @@
+/**
+ * image-focus.ts: the one home for "where is the subject in this photo".
+ *
+ * COPY THIS FILE into your project (e.g. src/lib/image-focus.ts) if you want hand-picked
+ * crop overrides. It is entirely optional: FACE_CLIPPED and CROP work without it. Point
+ * `focusRegistry.handPath` at wherever you put it in photo-framing.config.json, so
+ * page-review includes it in a route's content hash (edit this file, and every route that
+ * uses one of its images needs review again).
+ *
+ * WHY THIS EXISTS: `object-fit: cover` always needs a vertical/horizontal anchor whenever a
+ * box's aspect ratio does not match the photo's, and a renderer that just guesses `center`
+ * will sometimes bisect a face. A subject's position in the frame is a fact about the FILE,
+ * known once, not a fact about any one place it gets used. This registry is that fact's
+ * single home, keyed by the exact path the browser requests, so every renderer asks the same
+ * question and gets the same answer instead of re-guessing per call site.
+ *
+ * HOW TO USE IT: call `focusFor(src)` from any component that shows a content photo with
+ * `object-fit: cover`, and use the result as the CSS `object-position`. A component that
+ * already accepts a per-call override (e.g. `heroObjectPosition`, `objectPosition`) should
+ * prefer that override and fall back to `focusFor(src)` instead of the literal string
+ * `'center'`:
+ *
+ *   style={{ objectPosition: override || focusFor(src) }}
+ *
+ * Add an entry here once a photo is found clipping a subject somewhere (page-review's
+ * FACE_CLIPPED finding, or --face-report's suggestedFix.objectPosition, tells you the exact
+ * value); do not add entries "just in case" for photos nobody has reported an issue on.
+ *
+ * A NEW photo with a detected prominent face gets an automatic entry in the AUTO_FOCUS
+ * registry (config.focusRegistry.autoPath, GENERATED -- see
+ * node_modules/photo-framing/scripts/lib/image-focus-gen.mjs) without anyone hand-picking
+ * it; focusFor() below checks this hand-picked FOCUS registry first, then falls back to that
+ * automatic one. Once a human actually reviews the image, promote it here; leaving its
+ * automatic entry in place afterward is harmless, since FOCUS always wins.
+ */
+import { AUTO_FOCUS } from './image-focus.auto'
+
+/** src (exact path or remote-upload path, photo or video) -> CSS object-position. */
+const FOCUS: Record<string, string> = {
+  // '/images/example/portrait.webp': 'center top',
+}
+
+/** CSS object-position for `src`, or `fallback` (default `'center'`) when it has no registered focus. */
+export function focusFor(src: string, fallback = 'center'): string {
+  return FOCUS[src] || AUTO_FOCUS[src] || fallback
+}

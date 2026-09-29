@@ -1,0 +1,28 @@
+{
+  "baseUrl": "https://example.com",
+  "threshold": 0.6,
+  "routes": {
+    "appDir": "src/app"
+  },
+  "media": {
+    "roots": ["public"],
+    "remoteOrigin": null,
+    "remoteUploadPrefixes": []
+  },
+  "focusRegistry": {
+    "handPath": null,
+    "autoPath": "src/lib/image-focus.auto.ts"
+  },
+  "blockRequestPatterns": [
+    "googletagmanager\\.com",
+    "google-analytics\\.com",
+    "doubleclick\\.net"
+  ],
+  "chrome": {
+    "extraCandidates": []
+  },
+  "devServer": {
+    "buildCommand": "npm run build",
+    "startCommand": "npx next start -p {port} -H 127.0.0.1"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "photo-framing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Screenshot-driven crop and face-safety checks for web pages, plus a deploy gate that refuses to ship a changed page without a review stamp.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "photo-framing-review": "scripts/page-review.mjs",
+    "photo-framing-gate": "scripts/page-review-gate.mjs",
+    "photo-framing-generate-focus": "scripts/generate-image-focus.mjs"
+  },
+  "scripts": {
+    "smoke-test": "bash smoke-test/run-smoke-test.sh"
+  },
+  "dependencies": {
+    "playwright-core": "^1.63.0",
+    "sharp": "^0.35.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "scripts",
+    "faces/models",
+    "faces/requirements.txt",
+    "faces/licenses",
+    "templates",
+    "photo-framing.config.example.json",
+    "README.md",
+    "LICENSE"
+  ]
+}
