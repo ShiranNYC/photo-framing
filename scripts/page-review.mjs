@@ -84,7 +84,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const config = loadConfig()
 const {
   REPO, REVIEW_DIR, STAMPS_PATH, BASELINE_PATH, CROP_WORST_PATH, CROP_WORST_SHOTS, FACES_VENV,
-  contentHash, isDynamicKey, keyForUrlPath, keyMatcher, readStamps, routeModel, excludeInfo, isExcludedPath, resolveRenderedMedia,
+  contentHash, isDynamicKey, keyForUrlPath, planFromUrlPaths, keyMatcher, readStamps, routeModel, excludeInfo, isExcludedPath, resolveRenderedMedia,
 } = makeLib(config)
 
 const HONESTY =
@@ -731,7 +731,7 @@ async function sitemap() {
   return sitemapPaths
 }
 const plan = [] // { key|null, paths[] }
-if (ALL_SITEMAP) plan.push({ key: null, paths: [...new Set(await sitemap())] })
+if (ALL_SITEMAP) plan.push(...planFromUrlPaths(await sitemap(), keys))
 const requestedExcluded = requested.filter((r) => isExcludedPath(r))
 for (const r of requested.filter((r) => !isExcludedPath(r))) {
   if (isDynamicKey(r)) {
@@ -1176,7 +1176,10 @@ if (local && !NO_SHOTS && !WHAT_IF) {
       console.log(`\nnot stamped: ${item.paths[0]} is one URL of ${item.partialOf}; review the pattern: node node_modules/photo-framing/scripts/page-review.mjs -- '${item.partialOf}'`)
       continue
     }
-    if (!item.key) continue
+    if (!item.key) {
+      console.log(`\nnot stamped: ${item.paths.length} reviewed URL(s) match no discovered route: ${item.paths.join(', ')}`)
+      continue
+    }
     if (item.paths.some((p) => byPath.get(p).failing.length)) continue
     const route = fresh.find((r) => r.key === item.key)
     if (contentHash(route) !== hashBefore.get(item.key)) {

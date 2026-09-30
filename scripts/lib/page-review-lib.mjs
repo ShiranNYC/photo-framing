@@ -91,6 +91,25 @@ export function makeLib(config) {
     return keys.filter(isDynamicKey).find((k) => keyMatcher(k).test(p)) || null
   }
 
+  /**
+   * Groups concrete URL paths (a sitemap) into review-plan items, one per route, so a
+   * whole-site run can stamp each route it fully covered. A dynamic route collects every URL
+   * it serves; a URL no route serves goes into one final item with a null route (reviewed,
+   * never stamped, and named by the caller).
+   */
+  function planFromUrlPaths(urlPaths, routeKeys) {
+    const grouped = new Map()
+    const orphans = []
+    for (const p of new Set(urlPaths)) {
+      const route = keyForUrlPath(p, routeKeys)
+      if (!route) orphans.push(p)
+      else grouped.set(route, [...(grouped.get(route) || []), p])
+    }
+    const items = [...grouped].map(([route, paths]) => ({ key: route, paths }))
+    if (orphans.length) items.push({ key: null, paths: orphans })
+    return items
+  }
+
   /** Files a route dir owns: its own files plus non-route subfolders (stops at child routes). */
   function ownFiles(dirRel, allRouteDirs) {
     const abs = inProject(config, dirRel)
@@ -389,6 +408,7 @@ export function makeLib(config) {
     isDynamicKey,
     keyMatcher,
     keyForUrlPath,
+    planFromUrlPaths,
     routeModel,
     excludeInfo,
     isExcludedPath,

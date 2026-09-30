@@ -140,3 +140,20 @@ test('exclude also works in one-hop mode', () => {
   const { lib } = libFor(makeProject(SHARED_APP), { routes: { exclude: ['/portal'] } })
   assert.deepEqual(lib.routeModel().map((r) => r.key).sort(), ['/', '/about'])
 })
+
+test('a whole-site run plans one item per route, so every fully covered route can be stamped', () => {
+  const { lib } = libFor(makeProject({
+    'src/app/page.tsx': 'export default () => null',
+    'src/app/about/page.tsx': 'export default () => null',
+    'src/app/people/page.tsx': 'export default () => null',
+    'src/app/people/[slug]/page.tsx': 'export default () => null',
+  }))
+  const routes = lib.routeModel().map((r) => r.key)
+  const plan = lib.planFromUrlPaths(['/', '/about', '/people', '/people/ann', '/people/bob', '/people/ann', '/nowhere'], routes)
+  const byRoute = Object.fromEntries(plan.map((i) => [String(i.key), i.paths]))
+  assert.deepEqual(byRoute['/people/[slug]'], ['/people/ann', '/people/bob'])
+  assert.deepEqual(byRoute['/people'], ['/people'])
+  assert.deepEqual(byRoute['/'], ['/'])
+  assert.deepEqual(byRoute['null'], ['/nowhere'])
+  assert.equal(plan.filter((i) => i.key === null).length, 1)
+})
