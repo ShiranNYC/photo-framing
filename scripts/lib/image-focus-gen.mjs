@@ -35,16 +35,22 @@ const pct = (v) => Math.round(clamp01(v) * 1000) / 10
  * the upper third of most cover crops instead of being bisected; horizontal anchor is the
  * midpoint of the faces' span. This is a photo-level default (no rendered box in play, unlike
  * page-review's per-usage positionRange), so it cannot guarantee every box shape stays
- * uncropped -- it is the same kind of starting point a hand-picked entry is, and a page can
+ * uncropped (it does guarantee the top of the face and hair stays visible in any box that
+ * passes the CROP check) -- it is the same kind of starting point a hand-picked entry is, and a page can
  * still override it or a human can promote a per-usage FOCUS entry after review.
  */
-export function autoPosition(mainFaces) {
+export function autoPosition(mainFaces, minVisible = 0.6) {
   const ext = mainFaces.map(extend)
   const top = Math.min(...ext.map((f) => f.y))
   const bottom = Math.max(...ext.map((f) => f.y + f.h))
   const left = Math.min(...ext.map((f) => f.x))
   const right = Math.max(...ext.map((f) => f.x + f.w))
-  const y = top + (bottom - top) * 0.25
+  // An object-position percentage is a fraction of the FREE space, not a point in the photo.
+  // With a box that still shows `minVisible` of the photo's height (the CROP threshold), y%
+  // hides at most y * (1 - minVisible) of the photo's top. Cap y so that hidden strip can
+  // never reach the top of the extended face box, or a face near the top of the photo is
+  // clipped by the very crop meant to protect it.
+  const y = Math.min(top + (bottom - top) * 0.25, Math.floor((top / (1 - minVisible)) * 1000) / 1000)
   const x = (left + right) / 2
   return `${pct(x)}% ${pct(y)}%`
 }
@@ -96,7 +102,7 @@ export function generate(config, { write } = { write: false }) {
     if (legacy.has(file)) continue
     const faces = FACES.lookup(file)
     if (!faces || !faces.main.length) continue
-    entries.push([file, autoPosition(faces.main)])
+    entries.push([file, autoPosition(faces.main, config.threshold)])
   }
   const body = entries.map(([file, pos]) => `  ${JSON.stringify(file)}: ${JSON.stringify(pos)},`).join('\n')
   return (
