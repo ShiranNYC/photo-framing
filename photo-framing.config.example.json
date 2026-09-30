@@ -2,12 +2,15 @@
   "baseUrl": "https://example.com",
   "threshold": 0.6,
   "routes": {
-    "appDir": "src/app"
+    "appDir": "src/app",
+    "trackImports": "one-hop",
+    "exclude": []
   },
   "media": {
     "roots": ["public"],
     "remoteOrigin": null,
-    "remoteUploadPrefixes": []
+    "remoteUploadPrefixes": [],
+    "trackRendered": false
   },
   "focusRegistry": {
     "handPath": null,

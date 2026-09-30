@@ -31,7 +31,9 @@ Full check definitions, config reference, and the ratchet/auto-crop mechanics:
 
 ## Install (new project)
 
-1. `npm install --save-dev github:ShiranNYC/photo-framing#<latest tag>`
+1. `npm install --save-dev github:ShiranNYC/photo-framing#<latest tag>` (v0.2.0 or later for
+   the options below). A deploy server without git can install from the release tarball
+   instead: `npm install --save-dev https://github.com/<owner>/photo-framing/archive/refs/tags/<tag>.tar.gz`
 2. `cp node_modules/photo-framing/photo-framing.config.example.json photo-framing.config.json`
    and set at least `baseUrl` and `routes.appDir` (your Next.js App Router dir).
 3. Gitignore `.photo-framing/*` except `stamps.json`, `baseline.json`, `crop-worst.md`,
@@ -40,6 +42,18 @@ Full check definitions, config reference, and the ratchet/auto-crop mechanics:
    `python3 -m venv .photo-framing/faces-venv && .photo-framing/faces-venv/bin/pip install -r node_modules/photo-framing/faces/requirements.txt`
 5. Add npm scripts `page-review`, `page-review:gate`, `generate:image-focus` pointing at the
    package's scripts (README has the exact `package.json` block).
+
+Sites that build pages from shared content and components (images named by key, not by path)
+should set, in `photo-framing.config.json`:
+
+- `"routes": { "trackImports": "deep" }`: a route owns the full import closure of its files and
+  layouts, so editing a shared file marks every route that reaches it STALE (`page-review -- --all`
+  re-stamps them). Default `"one-hop"` is the v0.1.0 behaviour.
+- `"media": { "trackRendered": true }` (on by default in deep mode): each stamp lists the local
+  images the page actually rendered and hashes them, so a changed photo blocks the routes that
+  show it.
+- `"routes": { "exclude": ["/admin"] }`: routes under these prefixes are skipped by review,
+  `--all` and the gate. Every run prints which were excluded; nothing is dropped silently.
 
 If the project already has `photo-framing.config.json`, it's already wired -- just run
 `npm run page-review -- <route>` on whatever you changed.

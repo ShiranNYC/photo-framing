@@ -83,7 +83,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const config = loadConfig()
 const {
   REPO, REVIEW_DIR, STAMPS_PATH, BASELINE_PATH, CROP_WORST_PATH, CROP_WORST_SHOTS, FACES_VENV,
-  contentHash, isDynamicKey, keyForUrlPath, keyMatcher, readStamps, routeModel,
+  contentHash, isDynamicKey, keyForUrlPath, keyMatcher, readStamps, routeModel, excludeInfo, isExcludedPath, resolveRenderedMedia,
 } = makeLib(config)
 
 const HONESTY =
@@ -502,7 +502,7 @@ const faceShotPath = (path, vpName, file, type = 'FACE_CLIPPED') =>
   join(REVIEW_DIR, 'shots', slugOf(path), `${type === 'FACE_CLIPPED' ? 'face' : type.toLowerCase().replace('_', '-')}-${vpName}-${createHash('sha1').update(file).digest('hex').slice(0, 10)}.png`)
 
 async function reviewPage(browser, base, path) {
-  const results = { path, findings: [], sheets: [], errors: [], faceUsages: [], notes: [], unscannedHits: [] }
+  const results = { path, findings: [], sheets: [], errors: [], faceUsages: [], notes: [], unscannedHits: [], rendered: [] }
   const shotDir = join(REVIEW_DIR, 'shots', slugOf(path))
   if (!NO_SHOTS) {
     rmSync(shotDir, { recursive: true, force: true })
@@ -598,6 +598,8 @@ async function reviewPage(browser, base, path) {
         }
       })
       const imgs = await page.evaluate(measureImages, { tryPos: TRY_POSITION, BAND_MIN_WIDTH: BACKDROP_MIN_WIDTH, BAND_FILL: BACKDROP_SECTION_FILL })
+      // every local image this page actually rendered, for the stamp's rendered-media list
+      results.rendered.push(...imgs.map((im) => im.file))
       const notes = []
       const found = checks(imgs, vp.name, results.faceUsages, notes, results.unscannedHits)
       results.notes.push(...notes)
@@ -718,15 +720,19 @@ process.on('exit', () => server?.stop())
 
 // Expand requested routes into concrete URL paths; dynamic keys expand via the served sitemap.
 let sitemapPaths = null
+let sitemapExcluded = 0
 async function sitemap() {
   if (sitemapPaths) return sitemapPaths
   const xml = await (await fetch(base + '/sitemap.xml')).text()
-  sitemapPaths = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].replace(/^https?:\/\/[^/]+/, '') || '/')
+  const all = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].replace(/^https?:\/\/[^/]+/, '') || '/')
+  sitemapPaths = all.filter((p) => !isExcludedPath(p))
+  sitemapExcluded = all.length - sitemapPaths.length
   return sitemapPaths
 }
 const plan = [] // { key|null, paths[] }
 if (ALL_SITEMAP) plan.push({ key: null, paths: [...new Set(await sitemap())] })
-for (const r of requested) {
+const requestedExcluded = requested.filter((r) => isExcludedPath(r))
+for (const r of requested.filter((r) => !isExcludedPath(r))) {
   if (isDynamicKey(r)) {
     const re = keyMatcher(r)
     const paths = (await sitemap()).filter((p) => re.test(p))
@@ -737,6 +743,18 @@ for (const r of requested) {
     // a concrete URL under a dynamic route reviews that URL only; it cannot stamp the whole pattern
     plan.push({ key: key && !isDynamicKey(key) ? key : null, paths: [r], partialOf: key && isDynamicKey(key) ? key : null })
   }
+}
+
+// One line, every run, whenever config excludes anything: nothing is dropped silently.
+{
+  const ex = excludeInfo()
+  if (ex.prefixes.length)
+    console.log(
+      `[page-review] excluded by config (routes.exclude): ${ex.routes.length} route(s) under ${ex.prefixes.join(', ')}` +
+        `${sitemapExcluded ? `; ${sitemapExcluded} sitemap URL(s) skipped` : ''}` +
+        `${requestedExcluded.length ? `; requested but skipped: ${requestedExcluded.join(', ')}` : ''}`,
+    )
+  if (!plan.length) die('nothing to review: every requested route is excluded by config (routes.exclude)')
 }
 
 // ---------- ratchet baseline ----------
@@ -1159,14 +1177,18 @@ if (local && !NO_SHOTS && !WHAT_IF) {
     if (!item.key) continue
     if (item.paths.some((p) => byPath.get(p).failing.length)) continue
     const route = fresh.find((r) => r.key === item.key)
-    const hash = contentHash(route)
-    if (hash !== hashBefore.get(item.key)) {
+    if (contentHash(route) !== hashBefore.get(item.key)) {
       console.log(`\nnot stamped: ${item.key} changed on disk during the review; run it again`)
       continue
     }
+    // media.trackRendered: the local files this route's URLs were measured rendering, at both
+    // viewports. They are hashed into the stamp and listed in it, so the gate can map a changed
+    // photo to every route that shows it.
+    const rendered = config.media.trackRendered ? resolveRenderedMedia(item.paths.flatMap((p) => byPath.get(p).rendered || [])) : null
     stamps[item.key] = {
       route: item.key,
-      contentHash: hash,
+      contentHash: contentHash(route, rendered || []),
+      ...(rendered ? { renderedMedia: rendered } : {}),
       reviewedAt: new Date().toISOString(),
       urls: item.paths,
       sheets: item.paths.flatMap((p) => byPath.get(p).sheets),

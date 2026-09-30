@@ -55,6 +55,51 @@ function die(msg) {
   process.exit(2)
 }
 
+const TRACK_IMPORTS = ['one-hop', 'deep']
+
+/**
+ * Validates a parsed config object and fills in defaults. Throws Error with a readable message
+ * on anything invalid (loadConfig turns that into a hard exit; tests call this directly).
+ */
+export function normalizeConfig(raw, projectRoot, configPath = null) {
+  if (raw.viewports && (!Array.isArray(raw.viewports) || !raw.viewports.length))
+    throw new Error('config.viewports, if present, must be a non-empty array')
+
+  const routes = { appDir: 'src/app', trackImports: 'one-hop', exclude: [], ...raw.routes }
+  if (!TRACK_IMPORTS.includes(routes.trackImports))
+    throw new Error(`config.routes.trackImports must be one of ${TRACK_IMPORTS.map((v) => `"${v}"`).join(', ')}, got ${JSON.stringify(routes.trackImports)}`)
+  if (!Array.isArray(routes.exclude) || routes.exclude.some((p) => typeof p !== 'string' || !p.startsWith('/') || p === '/'))
+    throw new Error('config.routes.exclude must be an array of route prefixes that start with "/" (e.g. "/admin"); "/" alone would exclude every route')
+  const exclude = [...new Set(routes.exclude.map((p) => p.replace(/\/+$/, '')))]
+
+  const media = { roots: ['public'], remoteOrigin: null, remoteUploadPrefixes: [], ...raw.media }
+  if (media.trackRendered !== undefined && typeof media.trackRendered !== 'boolean')
+    throw new Error('config.media.trackRendered, if present, must be true or false')
+  const focusRegistry = { handPath: null, autoPath: 'src/lib/image-focus.auto.ts', ...raw.focusRegistry }
+  const devServer = { buildCommand: 'npm run build', startCommand: 'npx next start -p {port} -H 127.0.0.1', ...raw.devServer }
+  const chrome = { extraCandidates: [], ...raw.chrome }
+
+  return {
+    configPath,
+    projectRoot,
+    baseUrl: raw.baseUrl || null,
+    threshold: typeof raw.threshold === 'number' ? raw.threshold : 0.6,
+    routes: { appDir: routes.appDir, trackImports: routes.trackImports, exclude },
+    media: {
+      roots: media.roots,
+      remoteOrigin: media.remoteOrigin,
+      remoteUploadPrefixes: media.remoteUploadPrefixes,
+      // Default: record rendered images in stamps exactly when deep import tracking is on.
+      trackRendered: media.trackRendered ?? routes.trackImports === 'deep',
+    },
+    focusRegistry: { handPath: focusRegistry.handPath, autoPath: focusRegistry.autoPath },
+    viewports: raw.viewports || DEFAULT_VIEWPORTS,
+    blockRequestPatterns: raw.blockRequestPatterns || DEFAULT_BLOCK_PATTERNS,
+    chrome,
+    devServer,
+  }
+}
+
 /**
  * Loads and validates the project config. Returns a fully-defaulted object plus
  * `projectRoot` (the directory the config file lives in -- every relative path in
@@ -75,33 +120,10 @@ export function loadConfig(startDir = process.cwd()) {
   } catch (e) {
     die(`${configPath} is not valid JSON: ${e.message}`)
   }
-  const projectRoot = dirname(configPath)
-
-  if (raw.viewports && (!Array.isArray(raw.viewports) || !raw.viewports.length))
-    die('config.viewports, if present, must be a non-empty array')
-
-  const routes = { appDir: 'src/app', ...raw.routes }
-  const media = { roots: ['public'], remoteOrigin: null, remoteUploadPrefixes: [], ...raw.media }
-  const focusRegistry = { handPath: null, autoPath: 'src/lib/image-focus.auto.ts', ...raw.focusRegistry }
-  const devServer = { buildCommand: 'npm run build', startCommand: 'npx next start -p {port} -H 127.0.0.1', ...raw.devServer }
-  const chrome = { extraCandidates: [], ...raw.chrome }
-
-  return {
-    configPath,
-    projectRoot,
-    baseUrl: raw.baseUrl || null,
-    threshold: typeof raw.threshold === 'number' ? raw.threshold : 0.6,
-    routes: { appDir: routes.appDir },
-    media: {
-      roots: media.roots,
-      remoteOrigin: media.remoteOrigin,
-      remoteUploadPrefixes: media.remoteUploadPrefixes,
-    },
-    focusRegistry: { handPath: focusRegistry.handPath, autoPath: focusRegistry.autoPath },
-    viewports: raw.viewports || DEFAULT_VIEWPORTS,
-    blockRequestPatterns: raw.blockRequestPatterns || DEFAULT_BLOCK_PATTERNS,
-    chrome,
-    devServer,
+  try {
+    return normalizeConfig(raw, dirname(configPath), configPath)
+  } catch (e) {
+    die(e.message)
   }
 }
 

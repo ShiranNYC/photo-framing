@@ -13,7 +13,10 @@
  * branch and says so.
  *
  * Changed files that map to no route (shared components, globals, lib, docs) are printed
- * under "not covered by page review:" every run; they are never silently dropped. Escape
+ * under "not covered by page review:" every run; they are never silently dropped. With
+ * routes.trackImports "deep" a shared file maps to every route that imports it, directly or
+ * transitively. Files reaching only routes.exclude'd routes are printed under "excluded by
+ * config", and one line names the exclusion every run. Escape
  * hatch: PHOTO_FRAMING_SKIP="<reason>" passes the gate, prints the reason loudly, and
  * appends it to .photo-framing/skips.log.
  *
@@ -32,7 +35,7 @@ import { makeLib } from './lib/page-review-lib.mjs'
 import { autoFocusPath, GENERATE_CMD, generate as generateAutoFocus } from './lib/image-focus-gen.mjs'
 
 const config = loadConfig()
-const { REPO, REVIEW_DIR, SKIP_LOG_PATH, contentHash, mapChangedFiles, readStamps, routeModel } = makeLib(config)
+const { REPO, REVIEW_DIR, SKIP_LOG_PATH, contentHash, mapChangedFiles, readStamps, routeModel, excludeInfo } = makeLib(config)
 
 const git = (...args) => {
   const r = spawnSync('git', args, { cwd: REPO, encoding: 'utf8' })
@@ -70,19 +73,30 @@ const changed = [
 ].filter(Boolean)
 
 const model = routeModel()
-const { routes, uncovered } = mapChangedFiles(changed, model)
 const stamps = readStamps()
+const { routes, uncovered, excluded } = mapChangedFiles(changed, model, stamps)
+
+// One line, every run, whenever config excludes anything: nothing is dropped silently.
+{
+  const ex = excludeInfo()
+  if (ex.prefixes.length) console.log(`  excluded by config (routes.exclude): ${ex.routes.length} route(s) under ${ex.prefixes.join(', ')}`)
+}
 
 const blocked = []
 console.log(`  ${changed.length} changed file(s) since base, ${routes.size} route(s) affected`)
 for (const [key, why] of [...routes].sort(([a], [b]) => a.localeCompare(b))) {
   const route = model.find((r) => r.key === key)
   const stamp = stamps[key]
-  const hash = contentHash(route)
+  const hash = contentHash(route, stamp?.renderedMedia || [])
   const state = !stamp ? 'MISSING' : stamp.contentHash !== hash ? 'STALE' : 'ok'
   if (state !== 'ok') blocked.push(key)
   const when = stamp ? ` (stamped ${new Date(stamp.reviewedAt).toISOString()})` : ''
   console.log(`  ${state.padEnd(7)} ${key}${state === 'ok' ? when : ''}   <- ${why.slice(0, 3).join(', ')}${why.length > 3 ? ` +${why.length - 3}` : ''}`)
+}
+
+if (excluded.length) {
+  console.log('\n  excluded by config (not gated):')
+  for (const u of excluded) console.log(`    ${u.file}   (only reaches ${u.routes.join(', ')})`)
 }
 
 if (uncovered.length) {

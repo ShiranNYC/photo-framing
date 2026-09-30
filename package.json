@@ -1,6 +1,6 @@
 {
   "name": "photo-framing",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Screenshot-driven crop and face-safety checks for web pages, plus a deploy gate that refuses to ship a changed page without a review stamp.",
   "license": "MIT",
@@ -11,7 +11,8 @@
     "photo-framing-generate-focus": "scripts/generate-image-focus.mjs"
   },
   "scripts": {
-    "smoke-test": "bash smoke-test/run-smoke-test.sh"
+    "smoke-test": "bash smoke-test/run-smoke-test.sh",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.63.0",
