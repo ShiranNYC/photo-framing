@@ -149,7 +149,9 @@ never failing. Anything not in it fails. The list can only shrink:
   just that check's current findings, leaving everything else alone, so a human can decide
   them on their own schedule instead of the gate blocking every page at once.
 - A route can be put on `baseline.json`'s `neverGrandfather` list: never baselined, never
-  exempted, a fix owed rather than a pass.
+  exempted, a fix owed rather than a pass. An entry is a URL path (`/artists`) or a route
+  pattern with dynamic segments (`/artists/[slug]`): each `[name]` matches one path segment,
+  so the pattern keeps covering pages added later instead of failing open.
 
 ## Auto-crop: the focus registry
 

@@ -74,6 +74,7 @@ import { chromium } from 'playwright-core'
 import { loadConfig } from './lib/config.mjs'
 import { makeLib } from './lib/page-review-lib.mjs'
 import { autoFocusPath, generate as generateAutoFocus } from './lib/image-focus-gen.mjs'
+import { neverMatcher } from './lib/never-grandfather.mjs'
 import {
   FACE_RULE, BACKDROP_RULE, BACKDROP_MAX_OPACITY, BACKDROP_OVERLAY_ALPHA, BACKDROP_MIN_WIDTH, BACKDROP_SECTION_FILL,
   loadFaces, coverView, clipOf, toBox, extend, positionRange, axisPercent,
@@ -764,13 +765,14 @@ const baselineDoc = existsSync(BASELINE_PATH)
   ? JSON.parse(readFileSync(BASELINE_PATH, 'utf8'))
   : { neverGrandfather: [], entries: [] }
 const NEVER = new Set((baselineDoc.neverGrandfather || []).map(normPath))
+const isNever = neverMatcher([...NEVER])
 const baseline = new Map(baselineDoc.entries.map((e) => [e.key, e]))
 /** Grandfathered = in the baseline (or about to be, under --write-baseline). PAGE_ERROR and
  * NOT_FACE_CHECKED never are: a missing or unscannable image is never quietly waved through. */
 const grandfathered = (path, fd) =>
   fd.type !== 'PAGE_ERROR' &&
   fd.type !== 'NOT_FACE_CHECKED' &&
-  !NEVER.has(normPath(path)) &&
+  !isNever(path) &&
   (WRITE_BASELINE || (BASELINE_ADD && fd.type === BASELINE_ADD) || baseline.has(findingKey(path, fd)))
 
 let FACES = loadFaces(config)
@@ -939,7 +941,7 @@ if (WRITE_BASELINE || BASELINE_ADD || (PRUNE_BASELINE && stale.length)) {
   const next = new Map(keep.map((e) => [e.key, e]))
   if (WRITE_BASELINE || BASELINE_ADD) {
     for (const f of allFindings) {
-      if (f.type === 'PAGE_ERROR' || NEVER.has(f.path)) continue
+      if (f.type === 'PAGE_ERROR' || isNever(f.path)) continue
       if (BASELINE_ADD && f.type !== BASELINE_ADD) continue
       const e = { key: f.key, route: f.path, viewport: f.viewport, check: f.type, file: f.keyFile || '' }
       if (f.fraction != null) e.fraction = f.fraction
