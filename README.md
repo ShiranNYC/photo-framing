@@ -60,7 +60,7 @@ Copy `skill/SKILL.md` to `~/.claude/skills/photo-framing/SKILL.md`. Claude Code 
 1. **Install** (see "Install path" below for why this method):
 
    ```bash
-   npm install --save-dev github:ShiranNYC/photo-framing#v0.1.0
+   npm install --save-dev github:ShiranNYC/photo-framing#v0.2.0
    ```
 
 2. **Copy the config** into your project root and edit it:
@@ -149,7 +149,9 @@ never failing. Anything not in it fails. The list can only shrink:
   just that check's current findings, leaving everything else alone, so a human can decide
   them on their own schedule instead of the gate blocking every page at once.
 - A route can be put on `baseline.json`'s `neverGrandfather` list: never baselined, never
-  exempted, a fix owed rather than a pass.
+  exempted, a fix owed rather than a pass. An entry is a URL path (`/artists`) or a route
+  pattern with dynamic segments (`/artists/[slug]`): each `[name]` matches one path segment,
+  so the pattern keeps covering pages added later instead of failing open.
 
 ## Auto-crop: the focus registry
 
@@ -186,13 +188,79 @@ every check against that URL, it just can never mark a route as reviewed for the
 gate, and `page-review-gate.mjs` has nothing to check against source-file changes for.
 `--sitemap` / `--all` still work off your live sitemap.xml either way.
 
+## Config reference
+
+Every key is optional except what your site needs; defaults shown. The annotated example is
+`photo-framing.config.example.json`.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `baseUrl` | `null` | Production URL, used as the origin for remote media. |
+| `threshold` | `0.6` | CROP: minimum visible fraction of a photo. |
+| `routes.appDir` | `"src/app"` | Next.js App Router directory. |
+| `routes.trackImports` | `"one-hop"` | `"one-hop"` (a route owns its own files plus page-local direct imports) or `"deep"` (full transitive import closure, see below). Any other value is a hard error. |
+| `routes.exclude` | `[]` | Route prefixes (`"/admin"`) removed from discovery, `--all` and the gate. Always reported, see below. |
+| `media.roots` | `["public"]` | Directories that hold local images. |
+| `media.trackRendered` | `true` when `trackImports` is `"deep"`, else `false` | Record the local images each route actually rendered in its stamp, and hash them. |
+| `media.remoteOrigin`, `media.remoteUploadPrefixes` | `null`, `[]` | Media hosted outside git. |
+| `focusRegistry.handPath`, `.autoPath` | `null`, `"src/lib/image-focus.auto.ts"` | Optional focus registries. |
+| `viewports`, `blockRequestPatterns`, `chrome`, `devServer` | see example | Browser and server setup. |
+
+## Sites that compose pages from shared content and components
+
+Some sites keep each page thin and build it from shared files: copy in `src/content/*.ts`,
+components in `src/components/*.tsx`, photos named by key (`img('hero')`) and resolved through
+one registry, never by a literal path in the page file. In the default `one-hop` mode a change
+to any of those files maps to no route ("not covered by page review"), and the gate never
+blocks. For such sites set:
+
+```json
+{
+  "routes": { "trackImports": "deep" }
+}
+```
+
+In `deep` mode a route's sources are its own files, the `layout.*` / `template.*` files from
+the app dir down to the route, and the **full transitive closure of static imports** of all of
+them: relative paths, `tsconfig.json`/`jsconfig.json` `paths` and `baseUrl` aliases (and the
+conventional `@/` for `src/`), index files, `export ... from`, side-effect imports, `require`
+and dynamic `import('literal')`, across `.ts .tsx .js .jsx .mjs .cjs .mdx`, plus imported CSS.
+Bare packages and anything under `node_modules` are skipped; cycles are fine.
+
+What that means in practice:
+
+- **A change to a shared file marks every route that reaches it STALE.** Edit one component
+  used by 60 pages and the gate blocks until all 60 are re-stamped. That is the point: the
+  edit can change all 60. `page-review -- --all` re-stamps them in one run.
+- **Photos are tracked by what the page rendered.** When a route is stamped, the measured
+  `<img>` srcs (after unwrapping `/_next/image`, at both viewports, for every reviewed URL of
+  that route) that resolve to files under `media.roots` are written to the stamp as
+  `renderedMedia` and hashed into the route's `contentHash`. The gate reads that list from the
+  stamp, so replacing or adding a photo marks exactly the routes that show it. Images inside
+  `<header>`, `<nav>`, `<footer>` and dialogs are not measured, so they are not listed.
+- **Literal media paths are scanned only in a route's own files and layouts**, not across the
+  closure: a shared image registry names every photo on the site and would make every photo
+  change touch every route.
+- Stamps stay backward compatible: a stamp without `renderedMedia` hashes as before. In
+  `deep` mode a v0.1.0 stamp goes STALE once (the source set is bigger) and is fixed by one
+  `--all` run.
+
+### Excluding routes
+
+`routes.exclude: ["/admin", "/portal"]` removes every route at or under those prefixes from
+discovery, from `--all` (sitemap URLs under them are skipped) and from the gate. It is never
+silent: `page-review` and the gate each print one line naming how many routes and which
+prefixes config excluded, and a changed file that reaches only excluded routes is listed under
+its own "excluded by config (not gated)" heading instead of vanishing. A file that reaches both
+an included and an excluded route is gated for the included one.
+
 ## Install path
 
 Installed as an **npm dependency pinned to a git tag**, not `npx`'d on demand or vendored by
 hand-copy:
 
 ```bash
-npm install --save-dev github:ShiranNYC/photo-framing#v0.1.0
+npm install --save-dev github:ShiranNYC/photo-framing#v0.2.0
 ```
 
 Why: the engine needs to read and write files inside your project on every run
@@ -224,3 +292,9 @@ passed on exactly that content. It does not prove a person looked at the screens
 the contact sheets (`.photo-framing/shots/<route>/`) before calling a page done -- the
 checks catch crops and clipped faces; they do not catch a photo that's simply the wrong one,
 badly lit, or off-brand.
+
+## Tests
+
+`npm test` runs the unit and gate tests (`node --test`, no browser, no extra dependencies):
+import closure, layout inclusion, stale-on-shared-change, rendered-media mapping, exclusion
+visibility, and that the default config reproduces the v0.1.0 mapping.

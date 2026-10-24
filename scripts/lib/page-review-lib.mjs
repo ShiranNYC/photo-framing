@@ -20,12 +20,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname, relative, sep } from 'node:path'
 import { inProject } from './config.mjs'
 import { reviewPaths } from './paths.mjs'
+import { makeImportGraph } from './import-graph.mjs'
 
 /** Media a page can reference from its image roots. A change to one of these re-requires review. */
 export const MEDIA_EXT = /\.(webp|jpe?g|png|avif|gif|svg|mp4|webm)$/i
 /** Files in the app-dir root that belong to EVERY page, not to "/". */
 const ROOT_GLOBAL = /^(layout\.[jt]sx?|globals\.css|not-found\.[jt]sx?|error\.[jt]sx?|loading\.[jt]sx?)$/
 const PAGE_FILE = /^page\.(tsx|ts|jsx|js|mdx)$/
+/** Files that render around every route below their directory (deep mode follows them up the tree). */
+const LAYOUT_FILE = /^(layout|template)\.(tsx|ts|jsx|js|mdx)$/
 
 /**
  * Builds every route-model function bound to one project config. Call once per run;
@@ -37,9 +40,18 @@ export function makeLib(config) {
   const FRONTEND = inProject(config, FRONTEND_REL)
   const SHARED_DIRS = [`${FRONTEND_REL}/components/`]
   const paths = reviewPaths(config)
+  const DEEP = config.routes.trackImports === 'deep'
+  const EXCLUDE = config.routes.exclude || []
+  const graph = DEEP ? makeImportGraph(REPO) : null
 
   const toPosix = (p) => p.split(sep).join('/')
   const rel = (abs) => toPosix(relative(REPO, abs))
+
+  /** True when a route key or concrete URL path sits under a `routes.exclude` prefix. */
+  const isExcludedPath = (p) => {
+    const n = p.replace(/\/+$/, '') || '/'
+    return EXCLUDE.some((x) => n === x || n.startsWith(x + '/'))
+  }
 
   /** Every directory under the app dir that renders a page, as project-relative paths. */
   function routeDirs() {
@@ -77,6 +89,25 @@ export function makeLib(config) {
     const p = urlPath.replace(/\/+$/, '') || '/'
     if (keys.includes(p)) return p
     return keys.filter(isDynamicKey).find((k) => keyMatcher(k).test(p)) || null
+  }
+
+  /**
+   * Groups concrete URL paths (a sitemap) into review-plan items, one per route, so a
+   * whole-site run can stamp each route it fully covered. A dynamic route collects every URL
+   * it serves; a URL no route serves goes into one final item with a null route (reviewed,
+   * never stamped, and named by the caller).
+   */
+  function planFromUrlPaths(urlPaths, routeKeys) {
+    const grouped = new Map()
+    const orphans = []
+    for (const p of new Set(urlPaths)) {
+      const route = keyForUrlPath(p, routeKeys)
+      if (!route) orphans.push(p)
+      else grouped.set(route, [...(grouped.get(route) || []), p])
+    }
+    const items = [...grouped].map(([route, paths]) => ({ key: route, paths }))
+    if (orphans.length) items.push({ key: null, paths: orphans })
+    return items
   }
 
   /** Files a route dir owns: its own files plus non-route subfolders (stops at child routes). */
@@ -173,16 +204,44 @@ export function makeLib(config) {
     return [...new Set([...text.matchAll(MEDIA_REF_RE)].map((m) => '/' + m[1]))]
   }
 
-  /** Build the per-route model: key, dir, source files, media files. Computed fresh every call. */
-  function routeModel() {
-    const dirs = routeDirs()
+  /** Layout/template files that wrap a route dir: every one from the app dir root down to the dir itself. */
+  function layoutFiles(dirRel) {
+    const out = []
+    const segs = dirRel.slice(FRONTEND_REL.length).split('/').filter(Boolean)
+    let cur = FRONTEND_REL
+    for (let i = 0; i <= segs.length; i++) {
+      if (i > 0) cur += '/' + segs[i - 1]
+      for (const e of readdirSync(inProject(config, cur), { withFileTypes: true }))
+        if (e.isFile() && LAYOUT_FILE.test(e.name)) out.push(`${cur}/${e.name}`)
+    }
+    return out
+  }
+
+  /**
+   * Build the model for a subset of route dirs: key, dir, source files, media files.
+   * One-hop (default): own files plus their page-local direct imports, exactly as v0.1.0.
+   * Deep: own files + wrapping layouts/templates + the full transitive import closure of all
+   * of them. Literal-path media is scanned only in the route's own files and layouts, not in
+   * the closure: a shared registry such as an image map names every photo on the site and
+   * would make every image change touch every route. The images a page really shows come from
+   * the stamp's rendered-media list instead (see resolveRenderedMedia).
+   */
+  function buildModel(dirs, allDirs) {
     const registries = IMAGE_FOCUS_FILES.map((file) => ({ file, images: new Set(registryImagePaths(file)) }))
     return dirs.map((dir) => {
-      const own = ownFiles(dir, dirs)
-      const src = new Set(own)
-      for (const f of own) for (const imp of pageLocalImports(f)) src.add(imp)
-      const sources = [...src]
-      const media = referencedMedia(sources).sort()
+      const own = ownFiles(dir, allDirs)
+      let sources
+      let scanned
+      if (DEEP) {
+        scanned = [...new Set([...own, ...layoutFiles(dir)])]
+        sources = [...graph.closure(scanned)]
+      } else {
+        const src = new Set(own)
+        for (const f of own) for (const imp of pageLocalImports(f)) src.add(imp)
+        sources = [...src]
+        scanned = sources
+      }
+      const media = referencedMedia(scanned).sort()
       for (const { file, images } of registries) {
         for (const root of config.media.roots) {
           if (images.size && media.some((m) => m.startsWith(root + '/') && images.has('/' + m.slice(root.length + 1)))) {
@@ -191,14 +250,63 @@ export function makeLib(config) {
           }
         }
       }
-      return { key: routeKeyForDir(dir), dir, sources: sources.sort(), media }
+      return { key: routeKeyForDir(dir), dir, sources: (DEEP ? [...new Set(sources)] : sources).sort(), media }
     })
   }
 
-  /** Content hash a stamp is bound to: every source file and referenced media file, by path and bytes. */
-  function contentHash(route) {
+  /** The per-route model for every route NOT excluded by config. Computed fresh every call. */
+  function routeModel() {
+    const dirs = routeDirs()
+    return buildModel(dirs.filter((d) => !isExcludedPath(routeKeyForDir(d))), dirs)
+  }
+
+  /** Model of the routes `routes.exclude` removed; used only to name what a changed file touches. */
+  function excludedModel() {
+    const dirs = routeDirs()
+    return buildModel(dirs.filter((d) => isExcludedPath(routeKeyForDir(d))), dirs)
+  }
+
+  /** What config excluded, for the one visible line every run prints: { prefixes, routes }. */
+  function excludeInfo() {
+    return { prefixes: EXCLUDE, routes: routeDirs().map(routeKeyForDir).filter(isExcludedPath).sort() }
+  }
+
+  /**
+   * Turns the image URL paths a page rendered (the measured <img> srcs, after unwrapping
+   * /_next/image) into project-relative files under media.roots. Remote URLs and files that
+   * are not in a configured root are dropped: only local files can be hashed.
+   */
+  function resolveRenderedMedia(urlPaths) {
+    const out = new Set()
+    for (const raw of urlPaths) {
+      if (typeof raw !== 'string' || !raw.startsWith('/') || raw.startsWith('//')) continue
+      let p
+      try {
+        p = decodeURIComponent(raw.replace(/[?#].*$/, ''))
+      } catch {
+        continue
+      }
+      if (p.split('/').includes('..')) continue
+      for (const root of config.media.roots) {
+        const cand = `${root}${p}`
+        if (MEDIA_EXT.test(cand) && existsSync(join(REPO, cand)) && statSync(join(REPO, cand)).isFile()) {
+          out.add(cand)
+          break
+        }
+      }
+    }
+    return [...out].sort()
+  }
+
+  /**
+   * Content hash a stamp is bound to: every source file and referenced media file, by path and
+   * bytes, plus the media the page was measured rendering (`rendered`, read from the stamp;
+   * empty for a v0.1.0 stamp, which leaves the hash exactly as v0.1.0 computed it).
+   */
+  function contentHash(route, rendered = []) {
     const h = createHash('sha256')
-    for (const f of [...route.sources, ...route.media].sort()) {
+    const base = new Set([...route.sources, ...route.media])
+    for (const f of [...base, ...rendered.filter((r) => !base.has(r))].sort()) {
       h.update(f + '\0')
       h.update(existsSync(join(REPO, f)) ? readFileSync(join(REPO, f)) : Buffer.from('<missing>'))
       h.update('\0')
@@ -229,12 +337,16 @@ export function makeLib(config) {
 
   /**
    * Map changed repo paths to the routes whose review they invalidate.
-   * Returns { routes: Map<key, reasons[]>, uncovered: [{file, why}] }.
-   * Nothing is dropped: every changed path lands in exactly one of the two.
+   * Returns { routes: Map<key, reasons[]>, uncovered: [{file, why}], excluded: [{file, routes}] }.
+   * Nothing is dropped: every changed path lands in exactly one of the three. `excluded` holds
+   * files that touch only routes `routes.exclude` removed. `stamps` lets a changed media file
+   * map to every route whose stamp lists it as rendered.
    */
-  function mapChangedFiles(changed, model = routeModel()) {
+  function mapChangedFiles(changed, model = routeModel(), stamps = {}) {
     const routes = new Map()
     const uncovered = []
+    const excluded = []
+    let excludedRoutes = null
     const add = (key, why) => {
       if (!routes.has(key)) routes.set(key, [])
       routes.get(key).push(why)
@@ -246,10 +358,20 @@ export function makeLib(config) {
         uncovered.push({ file, why: 'review record itself' })
         continue
       }
-      const owners = model.filter((r) => r.sources.includes(file) || r.media.includes(file))
+      const owners = model.filter(
+        (r) => r.sources.includes(file) || r.media.includes(file) || (stamps[r.key]?.renderedMedia || []).includes(file),
+      )
       if (owners.length) {
         owners.forEach((r) => add(r.key, file))
         continue
+      }
+      if (EXCLUDE.length) {
+        excludedRoutes ??= excludedModel()
+        const hit = excludedRoutes.filter((r) => r.sources.includes(file) || r.media.includes(file))
+        if (hit.length) {
+          excluded.push({ file, routes: hit.map((r) => r.key).sort() })
+          continue
+        }
       }
       // A deleted page file: its route is gone, nothing to review, but say so.
       if (file.startsWith(FRONTEND_REL + '/') && PAGE_FILE.test(file.split('/').pop()) && !existsSync(join(REPO, file))) {
@@ -274,7 +396,7 @@ export function makeLib(config) {
           : 'not page source'
       uncovered.push({ file, why })
     }
-    return { routes, uncovered }
+    return { routes, uncovered, excluded }
   }
 
   return {
@@ -286,7 +408,11 @@ export function makeLib(config) {
     isDynamicKey,
     keyMatcher,
     keyForUrlPath,
+    planFromUrlPaths,
     routeModel,
+    excludeInfo,
+    isExcludedPath,
+    resolveRenderedMedia,
     contentHash,
     readStamps,
     mapChangedFiles,
